@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  generated-files:
+    name: Generated files match src/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.13'
+      - uses: julia-actions/cache@v2
+      - name: Regenerate notebooks and markdown
+        run: julia --project=deploy -e 'using Pkg; Pkg.instantiate(); include("deploy/deploy.jl")'
+      - name: Fail if they differ from the committed ones
+        run: |
+          git status --porcelain notebooks solutions docs
+          test -z "$(git status --porcelain notebooks solutions docs)"
+
+  solution-cpu:
+    name: Solution runs on the CPU backend
+    runs-on: ubuntu-latest
+    env:
+      JULIA_NUM_THREADS: auto
+      JULIA_PKG_PRECOMPILE_AUTO: 0   # only precompile what the script loads, not CUDA/AMDGPU
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.13'   # the Julia version on Arctic
+      - uses: julia-actions/cache@v2
+      - name: Run src/gpu_workshop.jl
+        run: julia --project=. src/gpu_workshop.jl
