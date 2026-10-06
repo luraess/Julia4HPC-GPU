@@ -1,5 +1,7 @@
 # Julia4HPC-GPU
 
+[![CI](https://github.com/luraess/Julia4HPC-GPU/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/luraess/Julia4HPC-GPU/actions/workflows/ci.yml)
+
 <a href="https://julia4hpc.sciencesconf.org/program/graphic/date/2026-10-14"><img src="assets/julia4hpc_logo.png" alt="Julia4HPC" width="200" align="right"></a>
 
 GPU computing in Julia for HPC: the GPU part of [**Julia4HPC**, Formation au Langage Julia pour le Calcul Haute Performance](https://julia4hpc.sciencesconf.org/program/graphic/date/2026-10-14), Fréjus (France), 12–16 October 2026.
