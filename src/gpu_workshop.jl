@@ -427,9 +427,171 @@ println(join((device_name, nameof(typeof(backend)), FT, round(T_copyto[end]; dig
               round(T_broadcast[end]; digits=1), round(T_memcopy_ka; digits=1)), "; "))
 
 # ## 7. Cahn-Hilliard: discretisation and CPU reference
-#src Grid units, 5-point Laplacian, ghost-node mirror, explicit dt limit, invariants.
-#src Plain loop solver at 256^2; prints reference F and mean after N steps.
-#src Blanks: mu and C updates, dt limit.
+#
+# Before going to the GPU, we write the solver in plain Julia, with loops, on the
+# CPU. This shows the physics, and gives us a **reference solution** to check the
+# GPU versions against.
+#
+# ### Discretisation
+#
+# **Grid units.** We measure lengths in grid cells: `dx = dy = 1`. All constants are
+# then of order one and do not depend on the resolution. This also keeps `Float32`
+# accurate enough on Apple GPUs.
+#
+# **Laplacian.** With `dx = dy = 1`, the 5-point stencil at `(ix, iy)` is
+#
+# ```
+# ∇²A ≈ (A[ix-1, iy] - 2A[ix, iy] + A[ix+1, iy]) + (A[ix, iy-1] - 2A[ix, iy] + A[ix, iy+1])
+# ```
+#
+# **No-flux boundaries.** At the boundary, one neighbour lies outside the array. We
+# replace it by the cell itself, as in a mirror: no gradient across the boundary,
+# hence no flux. With `min` and `max` the index never leaves the array: at the right
+# boundary, `A[min(ix+1, nx), iy]` is `A[nx, iy]`. No `if` is needed, which GPUs like.
+#
+# **Time step.** We step explicitly in time: compute `μ` everywhere, then update `C`
+# everywhere. This is stable for `dt ≤ 2 / (D κ (γκ + 2))`, where `κ = 8` is the
+# largest eigenvalue of `-∇²` on the grid (`4/dx² + 4/dy²`). We use half of that.
+
+D     = FT(1)                                  # mobility
+wcell = FT(4)                                  # interface width, in cells
+γ     = wcell^2 / 8                            # gradient energy coefficient
+κmax  = FT(8)                                  # largest eigenvalue of -∇²: 4/dx² + 4/dy²
+dt    = 2 / (D * κmax * (γ * κmax + 2)) / 2    # half the explicit stability limit
+@printf("γ = %.3g,  dt = %.3g\n", γ, dt)
+
+# The initial condition is small random noise around a mean `C̄`. A fixed seed gives
+# the same field every time, so the GPU versions can start from exactly the same
+# state:
+
+function initial_condition(FT, n; C̄=0, ampl=0.02, seed=1234)
+    Random.seed!(seed)
+    C = C̄ .+ FT(ampl) .* randn(FT, n, n)
+    C .+= C̄ - mean(C)                          # pin the mean to exactly C̄
+    return C
+end
+
+# ### The solver
+#
+# The Laplacian at `(ix, iy)`, with the mirror boundaries. `Base.@propagate_inbounds`
+# lets the `@inbounds` of the caller apply inside `lap` as well (more in section 10).
+#
+# **Exercise:** complete the y-direction, following the x-direction.
+
+Base.@propagate_inbounds function lap(A, ix, iy, nx, ny)
+    a = A[ix, iy]
+    return (A[max(ix-1, 1), iy] - 2a + A[min(ix+1, nx), iy]) +   # x-direction
+           (A[ix, max(iy-1, 1)] - 2a + A[ix, min(iy+1, ny)])     # y-direction  #sol
+    #hint        ???                                                   # y-direction
+end
+
+# Pass 1 computes the chemical potential `μ = C³ - C - γ∇²C` at every cell. Julia
+# arrays are stored column by column, so the first index, `ix`, is the inner loop.
+#
+# **Exercise:** write the update of `μ[ix, iy]`.
+
+function chemical_potential!(μ, C, γ)
+    nx, ny = size(C)
+    @inbounds for iy in 1:ny, ix in 1:nx
+        c = C[ix, iy]
+        μ[ix, iy] = c^3 - c - γ * lap(C, ix, iy, nx, ny)  #sol
+        #hint μ[ix, iy] = ???
+    end
+    return
+end
+
+# Pass 2 updates the concentration, `C = C + dt·D·∇²μ`. We pass `dtD = dt * D` as
+# a single number.
+#
+# **Exercise:** write the update of `C[ix, iy]`.
+
+function update_concentration!(C, μ, dtD)
+    nx, ny = size(C)
+    @inbounds for iy in 1:ny, ix in 1:nx
+        C[ix, iy] += dtD * lap(μ, ix, iy, nx, ny)  #sol
+        #hint C[ix, iy] += ???
+    end
+    return
+end
+
+# The free energy, `F = Σ (C² - 1)²/4 + γ/2 |∇C|²`, which must decrease over time.
+# The gradient terms are differences between neighbouring cells:
+
+function free_energy(C, γ)
+    nx, ny = size(C)
+    F = zero(eltype(C))
+    for iy in 1:ny, ix in 1:nx
+        c = C[ix, iy]
+        F += (c^2 - 1)^2 / 4
+        if ix < nx
+            F += γ / 2 * (C[ix+1, iy] - c)^2
+        end
+        if iy < ny
+            F += γ / 2 * (C[ix, iy+1] - c)^2
+        end
+    end
+    return F
+end
+
+# The time loop. Every `nout` steps it keeps a snapshot of `C` and the free energy,
+# for plotting:
+
+function cahn_hilliard_cpu(C0, γ, dtD, nt; nout=nt)
+    C  = copy(C0)
+    μ  = zeros(eltype(C), size(C))
+    Cs = [copy(C)]                             # snapshots of C, every nout steps
+    Fs = [free_energy(C, γ)]                   # free energy, every nout steps
+    for it in 1:nt
+        chemical_potential!(μ, C, γ)           # pass 1
+        update_concentration!(C, μ, dtD)       # pass 2
+        if it % nout == 0
+            push!(Cs, copy(C))
+            push!(Fs, free_energy(C, γ))
+        end
+    end
+    return C, Cs, Fs
+end
+
+# ### Run it
+#
+# A small grid, since plain loops on one CPU core are slow:
+
+n    = 256
+nt   = 20_000
+nout = 500
+C0   = initial_condition(FT, n)
+
+cahn_hilliard_cpu(C0, γ, dt * D, 10)           # warm-up: compiles the functions
+t0 = time()
+C_ref, Cs, Fs = cahn_hilliard_cpu(C0, γ, dt * D, nt; nout)
+t_cpu = time() - t0
+@printf("CPU reference: %d steps in %.1f s,  T_eff = %.1f GB/s\n",
+        nt, t_cpu, T_eff(5, C0, t_cpu / nt))
+
+# Did it work? The mean must stay constant, and the free energy must decrease:
+
+@printf("mean(C): %+.2e -> %+.2e   (must stay constant)\n", mean(C0), mean(C_ref))
+@printf("F:       %.6g -> %.6g   (must decrease)\n", Fs[1], Fs[end])
+println("F decreases at every output: ", all(diff(Fs) .< 0))
+
+# The movie of the run:
+
+ts  = (0:length(Cs)-1) .* (nout * dt)          # time of each snapshot
+fig = Figure(size=(500, 450))
+ax  = Axis(fig[1, 1]; aspect=DataAspect(), xlabel="x", ylabel="y")
+hm  = heatmap!(ax, Cs[1]; colormap=:balance, colorrange=(-1, 1))
+Colorbar(fig[1, 2], hm; label="C")
+Record(fig, eachindex(Cs); framerate=8) do i
+    hm[1] = Cs[i]
+    ax.title = @sprintf("t = %.1f", ts[i])
+end
+
+#-
+
+lines(ts, Fs; axis=(xlabel="t", ylabel="free energy F"))
+
+# `C_ref`, the field after `nt` steps from `C0`, is our reference. In sections 8
+# and 10 we run the same steps on the GPU and compare with it.
 
 # ## 8. Cahn-Hilliard with array programming
 #src KA.allocate + broadcasting, flux form (face arrays, zero boundary flux = mirror).
