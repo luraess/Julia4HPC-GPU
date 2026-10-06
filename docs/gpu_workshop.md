@@ -119,9 +119,9 @@ grid:
 1. compute `μ` from `C`, which needs the neighbours of `C` for `∇²C`;
 2. update `C` from `μ`, which needs the neighbours of `μ` for `∇²μ`.
 
-Since pass 2 needs `μ` at the neighbouring cells, `μ` has to be stored in an array
-between the two passes. Each time step therefore reads `C` and writes `μ`, then
-reads `μ` and `C` and writes `C`: **5 array accesses** per time step.
+Since pass 2 needs `μ` at the neighbouring cells, we store `μ` in an array between
+the two passes. Each time step therefore reads `C` and writes `μ`, then reads `μ`
+and `C` and writes `C`: **5 array accesses** per time step.
 
 ## 3. What limits performance
 
@@ -162,6 +162,9 @@ arrays that **must** be read or written, assuming neighbours come from cache:
 |:----------|:-------------|
 | memcopy `A = B` | 2: read `B`, write `A` |
 | Cahn-Hilliard, one time step | 5: read `C`, write `μ`, read `μ`, read `C`, write `C` |
+
+For Cahn-Hilliard, 5 is the minimum for *our two-pass algorithm*, which stores `μ`
+between the passes (section 2).
 
 A memcopy does nothing but move data, so no code moving the same amount of data
 can be faster. **The memcopy throughput measured on your GPU, `T_peak`, is our
@@ -621,6 +624,10 @@ and 10 we run the same steps on the GPU and compare with it.
 
 ## 8. Cahn-Hilliard with array programming
 
+> **New session, or restarted the kernel?** The sections below use results from
+> above, such as `T_peak` and the reference solution `C_ref`. Select this cell and
+> run *Run → Run All Above Selected Cell*: it takes a minute or two on a GPU.
+
 Our first GPU version uses **array programming**: we write operations on whole
 arrays with broadcasting (the `.`), and no loops, as in NumPy or Matlab. Each
 broadcast line, such as `A .= B .+ C`, becomes one GPU kernel that Julia
@@ -782,8 +789,8 @@ fig
 ````
 
 Each piece runs at a good fraction of `T_peak`: broadcasting generates efficient
-kernels. The whole step does not. Its `T_eff` counts the 5 arrays a time step
-*must* move, but array programming moves many more:
+kernels. The whole step does not. Its `T_eff` counts the 5 arrays a time step of
+our two-pass algorithm *must* move, but array programming moves many more:
 
 | piece | arrays moved |
 |:------|-------------:|
@@ -809,6 +816,227 @@ gives us.
 > costs memory traffic.
 
 ## 10. Kernel programming with neighbours
+
+With kernels we write ourselves, each pass of the time step becomes **one**
+kernel. Everything in between (`∇²C`, `∇²μ`, the differences between neighbours)
+stays in registers. A time step then moves only the 5 arrays our algorithm needs,
+instead of 16.
+
+The recipe is the one of section 6: **the kernel body is the body of the loop**.
+The neighbours are read with the very same `lap` function as in section 7, mirror
+boundaries included: one function serves the CPU loops and the GPU kernels.
+
+**Exercise:** complete the two kernels, using the bodies of your loops in
+`chemical_potential!` and `update_concentration!` (section 7).
+
+````julia
+@kernel inbounds = true function potential_ka!(μ, C, γ)
+    ix, iy = @index(Global, NTuple)
+    nx, ny = size(C)
+    c = C[ix, iy]
+    μ[ix, iy] = c^3 - c - γ * lap(C, ix, iy, nx, ny)
+end
+
+@kernel inbounds = true function concentration_ka!(C, μ, dtD)
+    ix, iy = @index(Global, NTuple)
+    nx, ny = size(C)
+    C[ix, iy] += dtD * lap(μ, ix, iy, nx, ny)
+end
+````
+
+The solver has the same structure as the array version. The two kernels are
+instantiated once, as static kernels, before the time loop:
+
+````julia
+function cahn_hilliard_ka(backend, C0, γ, dtD, nt)
+    nx, ny = size(C0)
+    FT = eltype(C0)
+    C  = KernelAbstractions.allocate(backend, FT, nx, ny)
+    copyto!(C, C0)                                     # upload the initial condition
+    μ  = KernelAbstractions.zeros(backend, FT, nx, ny)
+    potential!     = potential_ka!(backend, 256, (nx, ny))
+    concentration! = concentration_ka!(backend, 256, (nx, ny))
+    for it in 1:nt
+        potential!(μ, C, γ)                            # pass 1
+        concentration!(C, μ, dtD)                      # pass 2
+    end
+    KernelAbstractions.synchronize(backend)
+    return Array(C)                                    # download the result
+end
+````
+
+### Run it and compare with the reference
+
+````julia
+C_ka = cahn_hilliard_ka(backend, C0, γ, dt * D, nt)
+
+err_ka = maximum(abs.(C_ka .- C_ref))
+@printf("max |C_ka - C_ref| = %.2e\n", err_ka)
+@printf("mean(C) = %+.2e,  F = %.6g  (reference: %.6g)\n",
+        mean(C_ka), free_energy(C_ka, γ), Fs[end])
+println("matches the reference: ", err_ka < sqrt(eps(FT)))
+````
+
+The kernels do the same arithmetic in the same order as the CPU loops, so on many
+GPUs the result is identical to the reference, bit for bit.
+
+### Going further (read later)
+
+The rest of this section explains what happens under the hood. It is not needed
+for section 11.
+
+#### What `@index` does
+
+KernelAbstractions splits the `ndrange` into **workgroups** of `workgroupsize`
+work-items. The GPU runs each workgroup on one of its compute units (an SM on
+NVIDIA, a CU on AMD), in bunches of 32 (NVIDIA) or 64 (AMD) work-items that execute
+in lockstep.
+
+Under the hood, all backends launch a flat list of workgroups, each a flat list of
+work-items. The hardware gives every work-item two integers: the number of its
+workgroup, and its number inside the workgroup. `@index(Global, NTuple)` turns
+these into `(ix, iy)`. A 2D workgroup size such as `(8, 4)` is only the *shape of
+the tile* of the array that a workgroup covers.
+
+Let's look at both numbers for every element of a small 32 × 16 array:
+
+````julia
+@kernel function index_demo!(group, item)
+    ix, iy = @index(Global, NTuple)
+    g = @index(Group, Linear)                  # the workgroup of this work-item
+    l = @index(Local, Linear)                  # its number inside the workgroup
+    group[ix, iy] = g
+    item[ix, iy]  = l
+end
+
+function index_figure(backend, workgroupsize)
+    nx, ny = 32, 16
+    group = KernelAbstractions.zeros(backend, Float32, nx, ny)
+    item  = KernelAbstractions.zeros(backend, Float32, nx, ny)
+    index_demo!(backend, workgroupsize, (nx, ny))(group, item)
+    KernelAbstractions.synchronize(backend)
+    fig = Figure(size=(700, 260))
+    ax1 = Axis(fig[1, 1]; title="@index(Group, Linear)", aspect=DataAspect(), xlabel="ix", ylabel="iy")
+    ax2 = Axis(fig[1, 2]; title="@index(Local, Linear)", aspect=DataAspect(), xlabel="ix", ylabel="iy")
+    heatmap!(ax1, Array(group); colormap=:tab20)
+    heatmap!(ax2, Array(item); colormap=:viridis)
+    Label(fig[0, :], "workgroup size $workgroupsize"; font=:bold)
+    return fig
+end
+
+index_figure(backend, (32, 1))
+````
+
+````julia
+index_figure(backend, (8, 4))
+````
+
+With `(32, 1)` each workgroup covers one row segment; with `(8, 4)`, a tile of
+8 × 4 cells. In both cases, consecutive work-items run along `ix`, the first
+index, along which the array is contiguous in memory. Neighbouring work-items then
+read neighbouring memory addresses, which the GPU combines into few, wide memory
+transactions. For our stencils the tile shape changes little: 256 work-items
+along `ix` is a good default.
+
+#### Why static sizes help
+
+Turning the two integers into `(ix, iy)` takes an integer division and a remainder,
+and GPUs have no fast integer division. With a static kernel (workgroup size and
+`ndrange` fixed when it is instantiated), the divisors are known to the compiler,
+which replaces the divisions by cheap multiplications or bit shifts. That is the
+gain we saw in section 6. Note that `@index(Global, Linear)` is not cheaper:
+KernelAbstractions computes the 2D index first, then converts it back.
+
+#### Boundaries without `if`
+
+`lap` handles the boundaries with `min` and `max` instead of `if`. The work-items
+of a bunch execute the same instruction at the same time: if only some of them
+take an `if` branch, the bunch runs both branches, one after the other. With `min`
+and `max`, all work-items run the same instructions.
+
+#### `inbounds = true` and `Base.@propagate_inbounds`
+
+`inbounds = true` puts `@inbounds` on the kernel body: no bounds checks on its
+array accesses. It does not reach into the functions the kernel calls. That is
+why `lap` is marked `Base.@propagate_inbounds`, which lets it inherit the
+`@inbounds` of its caller. Without it, every neighbour access in `lap` is
+bounds-checked, which costs about 10% on these stencils.
+
+#### Apple GPUs: index arithmetic in 32 bits
+
+On Apple GPUs, computing `(ix, iy)` is expensive: Metal does it in 64-bit integer
+arithmetic, which these GPUs emulate in software, and 2D kernels run several times
+slower ([Metal.jl#910](https://github.com/JuliaGPU/Metal.jl/issues/910)). The
+workaround: launch a 1D `ndrange` of `nx·ny` work-items, and split the linear
+index by hand in 32-bit integers. With `nx` a power of two, the split is a bit mask
+and a shift:
+
+```
+ix = (I & (nx - 1)) + 1        iy = (I >> log2(nx)) + 1
+```
+
+`unsafe_indices = true` tells KernelAbstractions to skip its own index computation
+and bounds check: we launch exactly `nx·ny` work-items, so every index is valid.
+`@index(Global)` is then not available, so we build the linear index `I` ourselves,
+from the workgroup number and the number inside the workgroup (both from 0 here).
+
+````julia
+@kernel inbounds = true unsafe_indices = true function potential_i32!(μ, C, γ, mask::Int32, shift::Int32)
+    g  = Int32(@index(Group, Linear)) - Int32(1)
+    l  = Int32(@index(Local, Linear)) - Int32(1)
+    I  = g * Int32(@groupsize()[1]) + l
+    ix = (I & mask) + Int32(1)
+    iy = (I >> shift) + Int32(1)
+    nx, ny = Int32.(size(C))
+    c = C[ix, iy]
+    μ[ix, iy] = c^3 - c - γ * lap(C, ix, iy, nx, ny)
+end
+
+@kernel inbounds = true unsafe_indices = true function concentration_i32!(C, μ, dtD, mask::Int32, shift::Int32)
+    g  = Int32(@index(Group, Linear)) - Int32(1)
+    l  = Int32(@index(Local, Linear)) - Int32(1)
+    I  = g * Int32(@groupsize()[1]) + l
+    ix = (I & mask) + Int32(1)
+    iy = (I >> shift) + Int32(1)
+    nx, ny = Int32.(size(C))
+    C[ix, iy] += dtD * lap(μ, ix, iy, nx, ny)
+end
+````
+
+The time per step of both versions, on any backend:
+
+````julia
+function compare_indexing(backend, FT, n, γ, dtD)
+    C = KernelAbstractions.allocate(backend, FT, n, n)
+    copyto!(C, initial_condition(FT, n))
+    μ = KernelAbstractions.zeros(backend, FT, n, n)
+    potential!     = potential_ka!(backend, 256, (n, n))
+    concentration! = concentration_ka!(backend, 256, (n, n))
+    mask, shift    = Int32(n - 1), Int32(trailing_zeros(n))      # n must be a power of two
+    potential32!     = potential_i32!(backend, 256, (n * n,))
+    concentration32! = concentration_i32!(backend, 256, (n * n,))
+    # one step with each version, from the same state: the results must be identical
+    C32 = copy(C)
+    potential!(μ, C, γ);                   concentration!(C, μ, dtD)
+    potential32!(μ, C32, γ, mask, shift);  concentration32!(C32, μ, dtD, mask, shift)
+    println("same result: ", Array(C) == Array(C32))
+    t_2d = time_it(() -> (potential!(μ, C, γ); concentration!(C, μ, dtD)), backend)
+    t_32 = time_it(() -> (potential32!(μ, C, γ, mask, shift);
+                          concentration32!(C, μ, dtD, mask, shift)), backend)
+    @printf("@index(Global, NTuple): %8.3f ms per step\n", t_2d * 1e3)
+    @printf("Int32 split by hand:    %8.3f ms per step\n", t_32 * 1e3)
+    return
+end
+
+if backend isa CPU
+    println("skipped: `unsafe_indices` kernels need a GPU backend")
+else
+    compare_indexing(backend, FT, ns[end], γ, dt * D)
+end
+````
+
+On Apple GPUs the hand-made split is about 3× faster. On NVIDIA and AMD GPUs it
+brings nothing, or is even slower: always measure on your own hardware.
 
 ## 11. Performance of kernel programming
 
