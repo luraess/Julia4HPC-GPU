@@ -110,9 +110,15 @@ These last two properties will be our correctness checks.
 
 Starting from small random noise, the phases separate and then coarsen. The
 conserved mean `C̄ = mean(C)` selects the pattern: interwoven bands for `C̄ = 0`
-(left), droplets for `C̄ = 0.4` (right):
+(first), droplets for `C̄ = 0.4` (second):
 
-[▶ `C̄ = 0`](../assets/CahnHilliard2D_C0.mp4) · [▶ `C̄ = 0.4`](../assets/CahnHilliard2D_C04.mp4)
+**`C̄ = 0`**
+
+https://github.com/user-attachments/assets/03f8ac66-e961-4302-a263-9443137ceee9
+
+**`C̄ = 0.4`**
+
+https://github.com/user-attachments/assets/86cb2deb-0275-4ed3-896e-b6de0f58d819
 
 What matters for performance is that each time step makes **two passes** over the
 grid:

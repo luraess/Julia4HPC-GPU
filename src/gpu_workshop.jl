@@ -122,11 +122,17 @@ println("backend = ", nameof(typeof(backend)), ",  FT = ", FT, ",  device = ", d
 #
 # Starting from small random noise, the phases separate and then coarsen. The
 # conserved mean `C̄ = mean(C)` selects the pattern: interwoven bands for `C̄ = 0`
-# (left), droplets for `C̄ = 0.4` (right):
+# (first), droplets for `C̄ = 0.4` (second):
 #
 #nb # <video src="../assets/CahnHilliard2D_C0.mp4" width="400" controls autoplay loop muted></video>
 #nb # <video src="../assets/CahnHilliard2D_C04.mp4" width="400" controls autoplay loop muted></video>
-#md # [▶ `C̄ = 0`](../assets/CahnHilliard2D_C0.mp4) · [▶ `C̄ = 0.4`](../assets/CahnHilliard2D_C04.mp4)
+#md # **`C̄ = 0`**
+#md #
+#md # https://github.com/user-attachments/assets/03f8ac66-e961-4302-a263-9443137ceee9
+#md #
+#md # **`C̄ = 0.4`**
+#md #
+#md # https://github.com/user-attachments/assets/86cb2deb-0275-4ed3-896e-b6de0f58d819
 #
 # What matters for performance is that each time step makes **two passes** over the
 # grid:
