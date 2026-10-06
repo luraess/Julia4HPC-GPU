@@ -621,6 +621,101 @@ and 10 we run the same steps on the GPU and compare with it.
 
 ## 8. Cahn-Hilliard with array programming
 
+Our first GPU version uses **array programming**: we write operations on whole
+arrays with broadcasting (the `.`), and no loops, as in NumPy or Matlab. Each
+broadcast line, such as `A .= B .+ C`, becomes one GPU kernel that Julia
+generates for us. The arrays are allocated on the device with KernelAbstractions,
+so the same code runs on any backend.
+
+### The Laplacian with whole arrays
+
+To write `∇²A` with whole arrays, we split it in two steps, `∇²A = ∂/∂x(∂A/∂x) + ∂/∂y(∂A/∂y)`:
+
+1. The differences between neighbouring cells live on the **faces** between the
+   cells: `qx[ix, iy] = A[ix, iy] - A[ix-1, iy]` on the face left of cell `ix`.
+   With the two boundary faces, there are `nx + 1` faces along x.
+2. The Laplacian in a cell is the difference of its two face values:
+   `qx[ix+1, iy] - qx[ix, iy]`, plus the same along y.
+
+```
+ faces:   qx[1]    qx[2]    qx[3]   ...   qx[nx]   qx[nx+1]
+            |  A[1]  |  A[2]  |      ...     |  A[nx]  |
+            0                                          0     <- boundary faces
+```
+
+**No-flux boundaries** come for free: the two boundary faces are allocated with
+zeros and never written, so nothing flows through them. This is exactly the mirror
+of section 7: at `ix = 1`, `qx[2] - qx[1] = A[2] - A[1] = A[2] - 2A[1] + A[1]`.
+
+`@views` in front of a function makes every `A[2:nx, :]` inside it a *view* into
+`A` rather than a copy: no extra memory, and no extra memory traffic.
+
+**Exercise:** complete the y-direction, following the x-direction.
+
+````julia
+@views function gradient!(qx, qy, A)
+    nx, ny = size(A)
+    qx[2:nx, :] .= A[2:nx, :] .- A[1:nx-1, :]      # inner x-faces
+    qy[:, 2:ny] .= A[:, 2:ny] .- A[:, 1:ny-1]      # inner y-faces
+    return
+end
+````
+
+One time step: the same two passes as in section 7. After `gradient!(qx, qy, A)`,
+the Laplacian of `A` is `qx[2:nx+1, :] .- qx[1:nx, :] .+ qy[:, 2:ny+1] .- qy[:, 1:ny]`.
+
+**Exercise:** write the two updates, `μ = C³ - C - γ∇²C` and `C = C + dt·D·∇²μ`.
+
+````julia
+@views function step_ap!(C, μ, qx, qy, γ, dtD)
+    nx, ny = size(C)
+    # pass 1: chemical potential
+    gradient!(qx, qy, C)
+    μ .= C.^3 .- C .- γ .* (qx[2:nx+1, :] .- qx[1:nx, :] .+ qy[:, 2:ny+1] .- qy[:, 1:ny])
+    # pass 2: concentration update
+    gradient!(qx, qy, μ)
+    C .+= dtD .* (qx[2:nx+1, :] .- qx[1:nx, :] .+ qy[:, 2:ny+1] .- qy[:, 1:ny])
+    return
+end
+````
+
+The solver allocates the arrays on the device, uploads the initial condition, runs
+the time loop, and returns the result as a CPU `Array`:
+
+````julia
+function cahn_hilliard_ap(backend, C0, γ, dtD, nt)
+    nx, ny = size(C0)
+    FT = eltype(C0)
+    C  = KernelAbstractions.allocate(backend, FT, nx, ny)
+    copyto!(C, C0)                                     # upload the initial condition
+    μ  = KernelAbstractions.zeros(backend, FT, nx, ny)
+    qx = KernelAbstractions.zeros(backend, FT, nx + 1, ny)   # x-faces, boundary faces stay 0
+    qy = KernelAbstractions.zeros(backend, FT, nx, ny + 1)   # y-faces, boundary faces stay 0
+    for it in 1:nt
+        step_ap!(C, μ, qx, qy, γ, dtD)
+    end
+    return Array(C)                                    # download the result
+end
+````
+
+### Run it and compare with the reference
+
+The same initial condition and number of steps as the CPU reference:
+
+````julia
+C_ap = cahn_hilliard_ap(backend, C0, γ, dt * D, nt)
+
+err_ap = maximum(abs.(C_ap .- C_ref))
+@printf("max |C_ap - C_ref| = %.2e\n", err_ap)
+@printf("mean(C) = %+.2e,  F = %.6g  (reference: %.6g)\n",
+        mean(C_ap), free_energy(C_ap, γ), Fs[end])
+println("matches the reference: ", err_ap < sqrt(eps(FT)))
+````
+
+The two versions do the same arithmetic in a different order, so they agree to
+round-off rather than bit for bit: about `1e-14` in `Float64` (`1e-5` in
+`Float32`) after 20 000 steps. We accept differences below `sqrt(eps(FT))`.
+
 ## 9. Performance of array programming
 
 ## 10. Kernel programming with neighbours
