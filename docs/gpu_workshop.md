@@ -296,7 +296,8 @@ fig
 
 Small arrays do not measure the memory bandwidth: the launch overhead dominates,
 or the arrays fit in the GPU's cache. Only the largest sizes tell us what the
-memory can do. Our ceiling is the vendor copy at the largest size:
+memory can do. As a first estimate of our ceiling, we take the vendor copy at the
+largest size:
 
 ````julia
 T_peak = T_copyto[end]
@@ -362,7 +363,7 @@ t_static = time_it(() -> memcopy_static!(A, B), backend)
 
 @printf("dynamic: %7.1f GB/s\n", T_eff(2, A, t_dyn))
 @printf("static:  %7.1f GB/s\n", T_eff(2, A, t_static))
-@printf("T_peak:  %7.1f GB/s\n", T_peak)
+@printf("copyto!: %7.1f GB/s\n", T_copyto[end])
 ````
 
 The static kernel is usually faster: knowing the sizes lets the compiler simplify
@@ -393,6 +394,21 @@ T_ka = memcopy_ka_sweep(backend, FT, ns)
 ````
 
 ````julia
+T_memcopy_ka = T_ka[end]
+@printf("KA memcopy: %.1f GB/s = %.0f%% of copyto!\n", T_memcopy_ka, 100 * T_memcopy_ka / T_copyto[end])
+````
+
+A few lines of portable Julia get close to the vendor's tuned copy, and on some
+GPUs (AMD MI200 series, for example) they even beat it. The vendor copy is not
+always the fastest way to copy, so **our ceiling is the fastest memcopy we
+measured**:
+
+````julia
+T_peak = max(T_copyto[end], T_broadcast[end], T_memcopy_ka)
+@printf("T_peak = %.1f GB/s\n", T_peak)
+````
+
+````julia
 fig = Figure(size=(600, 400))
 ax  = Axis(fig[1, 1]; xscale=log2, xticks=ns, xlabel="n  (arrays of n × n)",
            ylabel="T_eff [GB/s]", title="memcopy, $(nameof(typeof(backend))), $FT")
@@ -404,14 +420,8 @@ axislegend(ax; position=:lt)
 fig
 ````
 
-````julia
-T_memcopy_ka = T_ka[end]
-@printf("KA memcopy: %.1f GB/s = %.0f%% of T_peak\n", T_memcopy_ka, 100 * T_memcopy_ka / T_peak)
-````
-
-A few lines of portable Julia get close to the vendor's tuned copy. This is the
-baseline for the Cahn-Hilliard kernels: they cannot beat it, and we will see how
-close they get.
+`T_peak` is the baseline for the Cahn-Hilliard kernels: they cannot beat it, and
+we will see how close they get.
 
 *On an Apple GPU, the KA kernel stays well below `copyto!`. Section 10 explains
 why, and how to fix it.*
@@ -419,11 +429,12 @@ why, and how to fix it.*
 ### Share your results
 
 Copy the line printed below into the results form (link given during the
-workshop). We will compare the GPUs of the whole room.
+workshop). It holds your device and the three memcopy throughputs, in GB/s:
+`copyto!`, `A .= B` and the KA kernel. We will compare the GPUs of the whole room.
 
 ````julia
-println(join((device_name, nameof(typeof(backend)), FT,
-              round(T_peak; digits=1), round(T_memcopy_ka; digits=1)), "; "))
+println(join((device_name, nameof(typeof(backend)), FT, round(T_copyto[end]; digits=1),
+              round(T_broadcast[end]; digits=1), round(T_memcopy_ka; digits=1)), "; "))
 ````
 
 ## 7. Cahn-Hilliard: discretisation and CPU reference
