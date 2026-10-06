@@ -46,7 +46,10 @@ On an Apple laptop, also run `julia --project=. -e 'using Pkg; Pkg.add("Metal")'
 | [`solutions/gpu_workshop_solution.ipynb`](solutions/gpu_workshop_solution.ipynb) | the same notebook, completed |
 | [`docs/gpu_workshop.md`](docs/gpu_workshop.md) | the completed notebook as a page to read |
 
-## For authors
+<br>
+
+<details>
+<summary><sub>Notes for authors</sub></summary>
 
 All three files above are generated from a single [Literate.jl](https://github.com/fredrikekre/Literate.jl) source, [`src/gpu_workshop.jl`](src/gpu_workshop.jl). Never edit them by hand: edit the source, then regenerate them from the repo root:
 
@@ -62,3 +65,5 @@ Mark exercise lines in the source:
 ```
 
 The source is the solution and runs as a plain Julia script. CI checks that the generated files match the source and runs the solution on the CPU backend.
+
+</details>

@@ -95,11 +95,8 @@ println("backend = ", nameof(typeof(backend)), ",  FT = ", FT, ",  device = ", d
 #   that much arithmetic per number, it waits for memory, not for compute
 #   (section 3).
 #
-# For such memory-bound codes, the GPU speedup is about the ratio of the memory
-# bandwidths. In the [JuliaCon 2026 edition](https://github.com/PTsolvers/JuliaCon26-GPUs-for-HPC)
-# of this workshop, the Cahn-Hilliard solver ran 10.8× faster on a GH200 GPU than on
-# the Grace CPU of the same node, and the ratio of their measured memory
-# throughputs was also 10.8.
+# For such memory-bound codes, the speedup of a GPU over a CPU is about the ratio
+# of their memory bandwidths.
 #
 # On Arctic, the `ar_mig` partition gives you a *slice* of an A100 (MIG). A slice
 # gets a share of the memory bandwidth: roughly 1/8 for `1g.10gb`, 1/4 for `2g.20gb`
@@ -168,10 +165,11 @@ println("backend = ", nameof(typeof(backend)), ",  FT = ", FT, ",  device = ", d
 # For memory-bound codes we measure the **effective memory throughput**
 #
 # ```math
-# T_\mathrm{eff} = \frac{n_\mathrm{arrays} \cdot n_x \cdot n_y \cdot \mathrm{sizeof(FT)}}{t} \quad [\mathrm{GB/s}]
+# T_\mathrm{eff} = \frac{n_\mathrm{arrays} \cdot n_x \cdot n_y \cdot \mathrm{sizeof(FT)}}{10^9 \cdot t} \quad [\mathrm{GB/s}]
 # ```
 #
-# where `t` is the time of one call (or one time step), and `n_arrays` counts the
+# where `sizeof(FT)` is the size of one number in bytes (8 for `Float64`), `t` is
+# the time of one call (or one time step) in seconds, and `n_arrays` counts the
 # arrays that **must** be read or written, assuming neighbours come from cache:
 #
 # | operation | arrays moved |
