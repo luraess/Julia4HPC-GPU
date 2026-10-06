@@ -1,5 +1,7 @@
 # Julia4HPC-GPU
 
+[![CI](https://github.com/luraess/Julia4HPC-GPU/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/luraess/Julia4HPC-GPU/actions/workflows/ci.yml)
+
 <a href="https://julia4hpc.sciencesconf.org/program/graphic/date/2026-10-14"><img src="assets/julia4hpc_logo.png" alt="Julia4HPC" width="200" align="right"></a>
 
 GPU computing in Julia for HPC: the GPU part of [**Julia4HPC**, Formation au Langage Julia pour le Calcul Haute Performance](https://julia4hpc.sciencesconf.org/program/graphic/date/2026-10-14), Fréjus (France), 12–16 October 2026.
@@ -46,7 +48,10 @@ On an Apple laptop, also run `julia --project=. -e 'using Pkg; Pkg.add("Metal")'
 | [`solutions/gpu_workshop_solution.ipynb`](solutions/gpu_workshop_solution.ipynb) | the same notebook, completed |
 | [`docs/gpu_workshop.md`](docs/gpu_workshop.md) | the completed notebook as a page to read |
 
-## For authors
+<br>
+
+<details>
+<summary><sub>Notes for authors</sub></summary>
 
 All three files above are generated from a single [Literate.jl](https://github.com/fredrikekre/Literate.jl) source, [`src/gpu_workshop.jl`](src/gpu_workshop.jl). Never edit them by hand: edit the source, then regenerate them from the repo root:
 
@@ -62,3 +67,5 @@ Mark exercise lines in the source:
 ```
 
 The source is the solution and runs as a plain Julia script. CI checks that the generated files match the source and runs the solution on the CPU backend.
+
+</details>
