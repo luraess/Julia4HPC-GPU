@@ -478,6 +478,10 @@ end
 
 # ### The solver
 #
+# A word on sizes: all our grids are square, `n × n` cells, and `n` is the size we
+# choose for a run or a benchmark. The functions that compute on arrays read
+# `nx, ny = size(A)` instead, so they work for rectangular grids too.
+#
 # The Laplacian at `(ix, iy)`, with the mirror boundaries. `Base.@propagate_inbounds`
 # lets the `@inbounds` of the caller apply inside `lap` as well (more in section 10).
 #
@@ -1000,9 +1004,201 @@ end
 # brings nothing, or is even slower: always measure on your own hardware.
 
 # ## 11. Performance of kernel programming
-#src Bench each kernel, full step, n sweep, final T_eff plot of all variants vs T_peak.
-#src Blanks: same pattern as S9.
+#
+# Time for the measurements, with the same recipe as in section 9: each kernel, then
+# the whole step, on the large grid.
+#
+# **Exercise:** fill in how many arrays each kernel moves.
 
-# ## Outlook
-#src Chmy.jl, ParallelStencil + ImplicitGlobalGrid (multi-GPU), Reactant.
-#src Links: JuliaCon26-GPUs-for-HPC, pde-on-gpu course.
+function bench_ka(backend, FT, n, γ, dtD)
+    C = KernelAbstractions.allocate(backend, FT, n, n)
+    copyto!(C, initial_condition(FT, n))       # realistic data: small noise
+    μ = KernelAbstractions.zeros(backend, FT, n, n)
+    potential!     = potential_ka!(backend, 256, (n, n))
+    concentration! = concentration_ka!(backend, 256, (n, n))
+    ## time each kernel, then the whole step
+    t_pot  = time_it(() -> potential!(μ, C, γ), backend)
+    t_con  = time_it(() -> concentration!(C, μ, dtD), backend)
+    t_step = time_it(() -> (potential!(μ, C, γ); concentration!(C, μ, dtD)), backend)
+    ## arrays each kernel moves
+    narr_pot  = 2  #sol
+    #hint narr_pot  = ???
+    narr_con  = 3  #sol
+    #hint narr_con  = ???
+    narr_step = 5                              # the minimum for our two-pass algorithm
+    return [T_eff(narr_pot, C, t_pot), T_eff(narr_con, C, t_con), T_eff(narr_step, C, t_step)]
+end
+
+T_kp     = bench_ka(backend, FT, ns[end], γ, dt * D)
+T_eff_ka = T_kp[end]                           # the whole step, kept for the final comparison
+labels   = ["potential_ka!", "concentration_ka!", "whole step"]
+for (label, T) in zip(labels, T_kp)
+    @printf("%-18s %7.1f GB/s   %3.0f%% of T_peak\n", label, T, 100 * T / T_peak)
+end
+
+# The whole step now runs close to `T_peak`: the kernels move only the 5 arrays the
+# algorithm needs, at nearly the speed of a memcopy. The stencil itself costs a
+# little (reading neighbours, the boundary `min`/`max`), which is why we stay
+# somewhat below the memcopy.
+#
+# ### Size matters, again
+#
+# The whole step for all the sizes of section 5, next to the memcopy:
+
+function ka_sweep(backend, FT, ns, γ, dtD)
+    T_step = Float64[]
+    for n in ns
+        C = KernelAbstractions.allocate(backend, FT, n, n)
+        copyto!(C, initial_condition(FT, n))
+        μ = KernelAbstractions.zeros(backend, FT, n, n)
+        potential!     = potential_ka!(backend, 256, (n, n))
+        concentration! = concentration_ka!(backend, 256, (n, n))
+        t = time_it(() -> (potential!(μ, C, γ); concentration!(C, μ, dtD)), backend)
+        push!(T_step, T_eff(5, C, t))
+        @printf("n = %5d   Cahn-Hilliard step: %7.1f GB/s\n", n, T_step[end])
+    end
+    return T_step
+end
+
+T_step_ka = ka_sweep(backend, FT, ns, γ, dt * D)
+
+#-
+
+fig = Figure(size=(600, 400))
+ax  = Axis(fig[1, 1]; xscale=log2, xticks=ns, xlabel="n  (arrays of n × n)",
+           ylabel="T_eff [GB/s]", title="kernel programming, $(nameof(typeof(backend))), $FT")
+scatterlines!(ax, ns, T_ka;        label="KA memcopy")
+scatterlines!(ax, ns, T_step_ka;   label="Cahn-Hilliard step")
+hlines!(ax, T_peak; color=:gray, linestyle=:dash, label="T_peak")
+axislegend(ax; position=:rb)
+fig
+
+# As for the memcopy, small grids are dominated by the launch overhead. On large
+# grids, the cost per cell no longer depends on the size: a 4× larger grid takes 4×
+# longer per step. In grid units the time step does not depend on the resolution, so
+# a larger grid simply means a larger domain at the same cost per cell.
+#
+# ### The payoff
+#
+# Let's run the Cahn-Hilliard solver on a 2048 × 2048 grid: 8× more cells along each
+# direction than the CPU reference of section 7, so 64× more cells in total, for the
+# same number of steps.
+#
+# *On a full GPU, try `n_big = 8192` (the size of our benchmarks): it takes about
+# 40 s on an A100 or MI250X, but several minutes on a small MIG slice, and plotting
+# 67 million cells takes a while too.*
+
+n_big = 2048
+haskey(ENV, "CI") && (n_big = 256)             # CI only: small size, fast run  #src
+C0_big = initial_condition(FT, n_big)
+cahn_hilliard_ka(backend, C0_big, γ, dt * D, 10)    # warm-up: compiles for this size
+t0 = time()
+C_big = cahn_hilliard_ka(backend, C0_big, γ, dt * D, nt)
+t_big = time() - t0
+@printf("GPU, %d² cells: %.1f s,  %.3f ns per cell and step\n", n_big, t_big, t_big / nt / n_big^2 * 1e9)
+@printf("CPU, %d² cells:   %.1f s,  %.3f ns per cell and step\n", n, t_cpu, t_cpu / nt / n^2 * 1e9)
+
+#-
+
+fig = Figure(size=(560, 500))
+ax  = Axis(fig[1, 1]; aspect=DataAspect(), xlabel="x", ylabel="y",
+           title=@sprintf("%d² cells, t = %.1f", n_big, nt * dt))
+hm  = heatmap!(ax, C_big; colormap=:balance, colorrange=(-1, 1))
+Colorbar(fig[1, 2], hm; label="C")
+fig
+
+# ### All implementations side by side
+#
+# The effective memory throughput of one time step, for every version we wrote:
+
+T_eff_cpu = T_eff(5, C0, t_cpu / nt)           # the CPU reference of section 7
+versions  = ["CPU loops\n(1 core, $(n)²)", "array\nprogramming", "kernel\nprogramming"]
+T_all     = [T_eff_cpu, T_eff_ap, T_eff_ka]
+
+fig = Figure(size=(600, 420))
+ax  = Axis(fig[1, 1]; xticks=(1:3, versions), ylabel="T_eff [GB/s]",
+           title="Cahn-Hilliard, one time step, $(nameof(typeof(backend))), $FT")
+barplot!(ax, 1:3, T_all; bar_labels=:y, label_formatter=x -> @sprintf("%.0f", x))
+hlines!(ax, T_peak; color=:gray, linestyle=:dash, label="T_peak")
+axislegend(ax; position=:lt)
+fig
+
+#-
+
+@printf("kernel programming is %.1f× faster than array programming\n", T_eff_ka / T_eff_ap)
+@printf("and reaches %.0f%% of T_peak\n", 100 * T_eff_ka / T_peak)
+
+# ### Share your results
+#
+# The line printed below extends the one of section 6 with the whole time step of
+# array and kernel programming (`T_eff` in GB/s). Copy it into the results form.
+
+println(join((device_name, nameof(typeof(backend)), FT, round(T_copyto[end]; digits=1),
+              round(T_broadcast[end]; digits=1), round(T_memcopy_ka; digits=1),
+              round(T_eff_ap; digits=1), round(T_eff_ka; digits=1)), "; "))
+
+# ## Wrap-up and outlook
+#
+# ### What we have seen
+#
+# - Stencil-based PDE solvers are **memory bound**. We measure them with the
+#   effective memory throughput `T_eff`, and compare it with `T_peak`, the memcopy
+#   measured on our own device.
+# - **Array programming** runs on the GPU as is, with broadcasting. It is quick to
+#   write, but each statement is a kernel, and every intermediate array costs memory
+#   traffic.
+# - **Kernel programming** with KernelAbstractions: the kernel body is the loop body.
+#   One kernel per pass keeps the intermediate values in registers, and gets close
+#   to `T_peak`.
+# - The same code runs on NVIDIA, AMD and Apple GPUs, and on the CPU.
+#
+# ### Food for thought: even fewer arrays
+#
+# Our two-pass algorithm stores `μ` between the passes. But `μ` does not depend on
+# its own history: we can **recompute it instead of storing it**. `∇²μ` needs `μ`
+# at the four neighbours, so compute it there on the fly, from `C`, with a function
+# such as
+#
+# ```julia
+# Base.@propagate_inbounds function mu(C, ix, iy, nx, ny, γ)
+#     c = C[ix, iy]
+#     return c^3 - c - γ * lap(C, ix, iy, nx, ny)
+# end
+# ```
+#
+# A single kernel per time step then reads `C` and writes the new `C`: **2 arrays
+# instead of 5**. Flops are (almost) free, remember?
+#
+# **Try it!** Some hints:
+#
+# - `C` can no longer be updated in place: the neighbours two cells away still need
+#   the old values. Write into a second array `C2`, and swap the two after each
+#   step: `C, C2 = C2, C`.
+# - Check the result against `C_ref`, as before.
+# - With our count of 5 arrays, `T_eff` can now exceed `T_peak`: you move less data
+#   than the two-pass algorithm needs. Count the 2 arrays you actually move.
+# - **No speed-up?** Then something other than memory limits the kernel. Here, it is
+#   the `min` and `max` of the mirror boundaries. In `mu(C, max(ix-1, 1), iy, ...)`,
+#   the compiler cannot see that many neighbour loads are the same, so it loads,
+#   and computes addresses for, about 25 values instead of 13. A fast path for the
+#   interior cells with plain offsets (`C[ix-1, iy]`, ...), with `min` and `max`
+#   only near the boundary, lets it share them. On an AMD MI250X at 8192², we
+#   measured 2.26 ms per step for the two kernels, 2.20 ms for the simple fused
+#   kernel, and 1.52 ms for the fused kernel with an interior fast path.
+#
+# A reference solution is in [`extras/fused_step.jl`](../extras/fused_step.jl).
+#
+# ### Going further
+#
+# - **More GPUs:** [ParallelStencil.jl](https://github.com/omlins/ParallelStencil.jl)
+#   and [ImplicitGlobalGrid.jl](https://github.com/eth-cscs/ImplicitGlobalGrid.jl)
+#   write stencil kernels in a notation close to the maths, and run them on many
+#   GPUs, with the halo exchange between them handled for you.
+# - **Higher-level finite differences:** [Chmy.jl](https://github.com/PTsolvers/Chmy.jl)
+#   builds dimension-agnostic stencils on staggered grids, on top of
+#   KernelAbstractions.
+# - **More kinds of devices:** [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl)
+#   compiles Julia code through MLIR and XLA, for CPUs, GPUs and TPUs.
+# - **A full course:** [Solving PDEs in parallel on GPUs with Julia](https://pde-on-gpu.vaw.ethz.ch),
+#   ETH Zurich.
+# - **The documentation:** [KernelAbstractions.jl](https://juliagpu.github.io/KernelAbstractions.jl/stable/).

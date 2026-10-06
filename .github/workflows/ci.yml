@@ -37,3 +37,5 @@ jobs:
       - uses: julia-actions/cache@v2
       - name: Run src/gpu_workshop.jl
         run: julia --project=. src/gpu_workshop.jl
+      - name: Run extras/fused_step.jl
+        run: julia --project=. extras/fused_step.jl
