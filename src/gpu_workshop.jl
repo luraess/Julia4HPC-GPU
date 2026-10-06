@@ -206,6 +206,7 @@ typeof(A_small)
 # we must wait for the GPU to finish with `KernelAbstractions.synchronize(backend)`:
 
 n = 8192
+haskey(ENV, "CI") && (n = 512)                 # CI only: small size, fast run  #src
 A = KernelAbstractions.zeros(backend, FT, n, n)
 B = KernelAbstractions.allocate(backend, FT, n, n)
 copyto!(B, rand(FT, n, n))                 # random values, copied from the CPU
@@ -282,6 +283,7 @@ function memcopy_sweep(backend, FT, ns)
 end
 
 ns = [512, 1024, 2048, 4096, 8192]
+haskey(ENV, "CI") && (ns = [256, 512])         # CI only: small sizes, fast run  #src
 T_copyto, T_broadcast = memcopy_sweep(backend, FT, ns)
 
 #-
@@ -558,6 +560,7 @@ end
 
 n    = 256
 nt   = 20_000
+haskey(ENV, "CI") && (nt = 2_000)              # CI only: fewer steps, fast run  #src
 nout = 500
 C0   = initial_condition(FT, n)
 
@@ -634,21 +637,32 @@ lines(ts, Fs; axis=(xlabel="t", ylabel="free energy F"))
     return
 end
 
-# One time step: the same two passes as in section 7. After `gradient!(qx, qy, A)`,
-# the Laplacian of `A` is `qx[2:nx+1, :] .- qx[1:nx, :] .+ qy[:, 2:ny+1] .- qy[:, 1:ny]`.
+# The two updates, one broadcast each. Once `gradient!(qx, qy, A)` has run, the
+# Laplacian of `A` is `qx[2:nx+1, :] .- qx[1:nx, :] .+ qy[:, 2:ny+1] .- qy[:, 1:ny]`.
 #
-# **Exercise:** write the two updates, `μ = C³ - C - γ∇²C` and `C = C + dt·D·∇²μ`.
+# **Exercise:** write `μ = C³ - C - γ∇²C` and `C = C + dt·D·∇²μ` as broadcasts.
 
-@views function step_ap!(C, μ, qx, qy, γ, dtD)
+@views function potential_ap!(μ, C, qx, qy, γ)
     nx, ny = size(C)
-    ## pass 1: chemical potential
-    gradient!(qx, qy, C)
     μ .= C.^3 .- C .- γ .* (qx[2:nx+1, :] .- qx[1:nx, :] .+ qy[:, 2:ny+1] .- qy[:, 1:ny])  #sol
     #hint μ .= ???
-    ## pass 2: concentration update
-    gradient!(qx, qy, μ)
+    return
+end
+
+@views function concentration_ap!(C, qx, qy, dtD)
+    nx, ny = size(C)
     C .+= dtD .* (qx[2:nx+1, :] .- qx[1:nx, :] .+ qy[:, 2:ny+1] .- qy[:, 1:ny])  #sol
     #hint C .+= ???
+    return
+end
+
+# One time step makes the same two passes as in section 7:
+
+function step_ap!(C, μ, qx, qy, γ, dtD)
+    gradient!(qx, qy, C)                       # pass 1: ∇C on the faces,
+    potential_ap!(μ, C, qx, qy, γ)             #         then μ
+    gradient!(qx, qy, μ)                       # pass 2: ∇μ on the faces,
+    concentration_ap!(C, qx, qy, dtD)          #         then C
     return
 end
 
@@ -686,8 +700,84 @@ println("matches the reference: ", err_ap < sqrt(eps(FT)))
 # `Float32`) after 20 000 steps. We accept differences below `sqrt(eps(FT))`.
 
 # ## 9. Performance of array programming
-#src Bench each broadcast line against T_peak, blank: arrays moved per line.
-#src Whole step T_eff with the minimal 5 arrays -> each line fast, the step is not.
+#
+# How fast is the array version? We time each piece of `step_ap!`, and the whole
+# step, on a large grid: the same size as for the memcopy, so we can compare with
+# `T_peak`.
+#
+# For `T_eff`, we need the number of arrays each piece moves. As before, neighbours
+# come from cache, and an array that is read and written counts twice. A face array
+# counts as one array: it is only one row or column longer than the grid.
+#
+# **Exercise:** fill in how many arrays each piece moves. Careful: `gradient!` runs
+# two kernels, one per direction.
+
+function bench_ap(backend, FT, n, γ, dtD)
+    C  = KernelAbstractions.allocate(backend, FT, n, n)
+    copyto!(C, initial_condition(FT, n))       # realistic data: small noise
+    μ  = KernelAbstractions.zeros(backend, FT, n, n)
+    qx = KernelAbstractions.zeros(backend, FT, n + 1, n)
+    qy = KernelAbstractions.zeros(backend, FT, n, n + 1)
+    ## time each piece, then the whole step
+    t_grad = time_it(() -> gradient!(qx, qy, C), backend)
+    t_pot  = time_it(() -> potential_ap!(μ, C, qx, qy, γ), backend)
+    t_con  = time_it(() -> concentration_ap!(C, qx, qy, dtD), backend)
+    t_step = time_it(() -> step_ap!(C, μ, qx, qy, γ, dtD), backend)
+    ## arrays each piece moves
+    narr_grad = 4  #sol
+    #hint narr_grad = ???
+    narr_pot  = 4  #sol
+    #hint narr_pot  = ???
+    narr_con  = 4  #sol
+    #hint narr_con  = ???
+    narr_step = 5                              # the minimum for one step (section 4)
+    return [T_eff(narr_grad, C, t_grad), T_eff(narr_pot, C, t_pot),
+            T_eff(narr_con, C, t_con),   T_eff(narr_step, C, t_step)]
+end
+
+T_ap     = bench_ap(backend, FT, ns[end], γ, dt * D)
+T_eff_ap = T_ap[end]                           # the whole step, kept for the final comparison
+labels   = ["gradient!", "potential_ap!", "concentration_ap!", "whole step"]
+for (label, T) in zip(labels, T_ap)
+    @printf("%-18s %7.1f GB/s   %3.0f%% of T_peak\n", label, T, 100 * T / T_peak)
+end
+
+#-
+
+fig = Figure(size=(600, 400))
+ax  = Axis(fig[1, 1]; xticks=(1:4, labels), ylabel="T_eff [GB/s]",
+           title="array programming, $(nameof(typeof(backend))), $FT")
+barplot!(ax, 1:4, T_ap)
+hlines!(ax, T_peak; color=:gray, linestyle=:dash, label="T_peak")
+axislegend(ax; position=:rt)
+fig
+
+# Each piece runs at a good fraction of `T_peak`: broadcasting generates efficient
+# kernels. The whole step does not. Its `T_eff` counts the 5 arrays a time step
+# *must* move, but array programming moves many more:
+#
+# | piece | arrays moved |
+# |:------|-------------:|
+# | `gradient!(qx, qy, C)` | 4 |
+# | `potential_ap!` | 4 |
+# | `gradient!(qx, qy, μ)` | 4 |
+# | `concentration_ap!` | 4 |
+# | **one time step** | **16**, where 5 would do |
+#
+# So even with every piece at memcopy speed, the step reaches at most 5/16, about
+# 30% of `T_peak`. The face arrays `qx` and `qy` are intermediate results that make
+# a round trip through memory, and `C` and `μ` are read several times.
+#
+# To do better, we must fuse the work into fewer kernels that keep intermediate
+# values in registers, close to the compute units. This is what kernel programming
+# gives us.
+#
+# > **Take-away: array programming on the GPU runs one kernel per statement.**
+# > Julia fuses all the dots of one statement, such as
+# > `μ .= C.^3 .- C .- γ .* (...)`, into a single kernel. Separate statements are
+# > separate kernels, and each one reads its inputs from memory and writes its
+# > result back to memory. Easy to write and correct, but every intermediate array
+# > costs memory traffic.
 
 # ## 10. Kernel programming with neighbours
 #src What @index is: 1D launch + CartesianIndices tile (@index Group/Local demo),
