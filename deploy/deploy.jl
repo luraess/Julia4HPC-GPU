@@ -17,8 +17,8 @@ const SRC  = joinpath(ROOT, "src", "gpu_workshop.jl")
 
 # Jupyter kernel the notebooks open with. Left to itself, Literate writes the Julia
 # version of whoever runs this script, so the output would depend on the machine.
-# Arctic runs Julia 1.13; "julia-1.13" is IJulia's default kernel name for it.
-# TODO: confirm against the kernel list on Arctic's JupyterHub (custom wrappers may differ).
+# Arctic runs Julia 1.13; the workshop setup installs its kernel with
+# `IJulia.installkernel("Julia", ...)`, which names it "julia-1.13".
 const KERNEL_NAME    = "julia-1.13"
 const KERNEL_DISPLAY = "Julia 1.13"
 
