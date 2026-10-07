@@ -988,13 +988,16 @@ ix = (I & (nx - 1)) + 1        iy = (I >> log2(nx)) + 1
 `unsafe_indices = true` tells KernelAbstractions to skip its own index computation
 and bounds check: we launch exactly `nx·ny` work-items, so every index is valid.
 `@index(Global)` is then not available, so we build the linear index `I` ourselves,
-from the workgroup number and the number inside the workgroup (both from 0 here).
+from the workgroup number `g` and the number `l` inside the workgroup.
+
+*Tip: write each `@index` as a plain assignment, `g = @index(...)`, never inside a
+larger expression. KernelAbstractions' CPU backend only recognises that form.*
 
 ````julia
 @kernel inbounds = true unsafe_indices = true function potential_i32!(μ, C, γ, mask::Int32, shift::Int32)
-    g  = Int32(@index(Group, Linear)) - Int32(1)
-    l  = Int32(@index(Local, Linear)) - Int32(1)
-    I  = g * Int32(@groupsize()[1]) + l
+    g  = @index(Group, Linear)
+    l  = @index(Local, Linear)
+    I  = (Int32(g) - Int32(1)) * Int32(@groupsize()[1]) + (Int32(l) - Int32(1))
     ix = (I & mask) + Int32(1)
     iy = (I >> shift) + Int32(1)
     nx, ny = Int32.(size(C))
@@ -1003,9 +1006,9 @@ from the workgroup number and the number inside the workgroup (both from 0 here)
 end
 
 @kernel inbounds = true unsafe_indices = true function concentration_i32!(C, μ, dtD, mask::Int32, shift::Int32)
-    g  = Int32(@index(Group, Linear)) - Int32(1)
-    l  = Int32(@index(Local, Linear)) - Int32(1)
-    I  = g * Int32(@groupsize()[1]) + l
+    g  = @index(Group, Linear)
+    l  = @index(Local, Linear)
+    I  = (Int32(g) - Int32(1)) * Int32(@groupsize()[1]) + (Int32(l) - Int32(1))
     ix = (I & mask) + Int32(1)
     iy = (I >> shift) + Int32(1)
     nx, ny = Int32.(size(C))
@@ -1038,11 +1041,7 @@ function compare_indexing(backend, FT, n, γ, dtD)
     return
 end
 
-if backend isa CPU
-    println("skipped: `unsafe_indices` kernels need a GPU backend")
-else
-    compare_indexing(backend, FT, ns[end], γ, dt * D)
-end
+compare_indexing(backend, FT, ns[end], γ, dt * D)
 ````
 
 On Apple GPUs the hand-made split is about 3× faster. On NVIDIA and AMD GPUs it
