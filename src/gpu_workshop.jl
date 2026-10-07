@@ -28,7 +28,9 @@
 # ## Setup
 #
 # Run this cell first, and again whenever you restart the kernel. It activates the
-# workshop environment and loads the packages we need.
+# workshop environment and loads the packages we need. On a Mac, the first run prints
+# a long list of warnings from AMDGPU, such as `HIP library is unavailable`: ignore
+# them, AMDGPU is only used on AMD GPUs.
 
 #src TODO: align with the shared depot on Arctic (Manifest.toml, whether to instantiate here).
 using Pkg
@@ -42,18 +44,19 @@ using Printf, Random, Statistics
 # Now choose the device to run on. The CPU is active by default: it is only there
 # to check that the code runs, the performance sections are meant for a GPU.
 #
-# To use a GPU, comment out the two CPU lines and uncomment the three lines of your GPU
+# To use a GPU, comment out the two CPU lines and uncomment the lines of your GPU
 # (select them and press `Ctrl + /`). On Arctic, that is the NVIDIA block on the
 # `ar_mig` and `ar_a100` partitions, and the AMD block on `ar_mi210`.
 #
 # `FT` is the floating-point type we compute in. Apple GPUs do not support `Float64`.
 #
-# > **On an Apple GPU?** Expect the kernels of sections 6, 10 and 11, and the array
-# > programming of sections 8 and 9, to reach only about 20–30% of `T_peak`. Metal
-# > computes 2D indices in 64-bit integer arithmetic, which Apple GPUs emulate in
-# > software ([Metal.jl#910](https://github.com/JuliaGPU/Metal.jl/issues/910)). The
-# > code is correct, only slower: compare the trends between versions rather than
-# > the absolute numbers. Section 10 shows a workaround.
+# > **On an Apple GPU?** The Metal block also loads a small, temporary fix,
+# > [`extras/metal_index_fix.jl`](../extras/metal_index_fix.jl). Without it, our
+# > kernels run at only about 20% of the memory bandwidth: Metal.jl computes the
+# > index of each work-item with 64-bit integer divisions, which Apple GPUs emulate
+# > in software ([Metal.jl#910](https://github.com/JuliaGPU/Metal.jl/issues/910)).
+# > The fix does the same arithmetic in 32 bits. It will no longer be needed once
+# > Metal.jl does this itself.
 
 backend = CPU();  FT = Float64                      # CPU: only to check that the code runs
 device_name = Sys.cpu_info()[1].model
@@ -67,6 +70,7 @@ device_name = Sys.cpu_info()[1].model
 ## device_name = AMDGPU.HIP.name(AMDGPU.device())   # which GPU you got
 
 ## using Metal                                      # Apple laptop
+## include(joinpath(@__DIR__, "..", "extras", "metal_index_fix.jl"))   # temporary fix, see above
 ## backend = MetalBackend();  FT = Float32
 ## device_name = string(Metal.device().name)
 
@@ -431,9 +435,6 @@ fig
 
 # `T_peak` is the baseline for the Cahn-Hilliard kernels: they cannot beat it, and
 # we will see how close they get.
-#
-# *On an Apple GPU, the KA kernel stays well below `copyto!`. Section 10 explains
-# why, and how to fix it.*
 #
 # ### Share your results
 #
@@ -948,6 +949,10 @@ index_figure(backend, (8, 4))
 # gain we saw in section 6. Note that `@index(Global, Linear)` is not cheaper:
 # KernelAbstractions computes the 2D index first, then converts it back.
 #
+# On Apple GPUs, Metal.jl does these divisions in 64-bit integers, which the GPU
+# emulates in software: that is what the fix loaded in the setup,
+# [`extras/metal_index_fix.jl`](../extras/metal_index_fix.jl), changes to 32 bits.
+#
 # #### Boundaries without `if`
 #
 # `lap` handles the boundaries with `min` and `max` instead of `if`. The work-items
@@ -962,77 +967,6 @@ index_figure(backend, (8, 4))
 # why `lap` is marked `Base.@propagate_inbounds`, which lets it inherit the
 # `@inbounds` of its caller. Without it, every neighbour access in `lap` is
 # bounds-checked, which costs about 10% on these stencils.
-#
-# #### Apple GPUs: index arithmetic in 32 bits
-#
-# On Apple GPUs, computing `(ix, iy)` is expensive: Metal does it in 64-bit integer
-# arithmetic, which these GPUs emulate in software, and 2D kernels run several times
-# slower ([Metal.jl#910](https://github.com/JuliaGPU/Metal.jl/issues/910)). The
-# workaround: launch a 1D `ndrange` of `nx·ny` work-items, and split the linear
-# index by hand in 32-bit integers. With `nx` a power of two, the split is a bit mask
-# and a shift:
-#
-# ```
-# ix = (I & (nx - 1)) + 1        iy = (I >> log2(nx)) + 1
-# ```
-#
-# `unsafe_indices = true` tells KernelAbstractions to skip its own index computation
-# and bounds check: we launch exactly `nx·ny` work-items, so every index is valid.
-# `@index(Global)` is then not available, so we build the linear index `I` ourselves,
-# from the workgroup number `g` and the number `l` inside the workgroup.
-#
-# *Tip: write each `@index` as a plain assignment, `g = @index(...)`, never inside a
-# larger expression. KernelAbstractions' CPU backend only recognises that form.*
-
-@kernel inbounds = true unsafe_indices = true function potential_i32!(μ, C, γ, mask::Int32, shift::Int32)
-    g  = @index(Group, Linear)
-    l  = @index(Local, Linear)
-    I  = (Int32(g) - Int32(1)) * Int32(@groupsize()[1]) + (Int32(l) - Int32(1))
-    ix = (I & mask) + Int32(1)
-    iy = (I >> shift) + Int32(1)
-    nx, ny = Int32.(size(C))
-    c = C[ix, iy]
-    μ[ix, iy] = c^3 - c - γ * lap(C, ix, iy, nx, ny)
-end
-
-@kernel inbounds = true unsafe_indices = true function concentration_i32!(C, μ, dtD, mask::Int32, shift::Int32)
-    g  = @index(Group, Linear)
-    l  = @index(Local, Linear)
-    I  = (Int32(g) - Int32(1)) * Int32(@groupsize()[1]) + (Int32(l) - Int32(1))
-    ix = (I & mask) + Int32(1)
-    iy = (I >> shift) + Int32(1)
-    nx, ny = Int32.(size(C))
-    C[ix, iy] += dtD * lap(μ, ix, iy, nx, ny)
-end
-
-# The time per step of both versions, on any backend:
-
-function compare_indexing(backend, FT, n, γ, dtD)
-    C = KernelAbstractions.allocate(backend, FT, n, n)
-    copyto!(C, initial_condition(FT, n))
-    μ = KernelAbstractions.zeros(backend, FT, n, n)
-    potential!     = potential_ka!(backend, 256, (n, n))
-    concentration! = concentration_ka!(backend, 256, (n, n))
-    mask, shift    = Int32(n - 1), Int32(trailing_zeros(n))      # n must be a power of two
-    potential32!     = potential_i32!(backend, 256, (n * n,))
-    concentration32! = concentration_i32!(backend, 256, (n * n,))
-    ## one step with each version, from the same state: the results must be identical
-    C32 = copy(C)
-    potential!(μ, C, γ);                   concentration!(C, μ, dtD)
-    potential32!(μ, C32, γ, mask, shift);  concentration32!(C32, μ, dtD, mask, shift)
-    println("same result: ", Array(C) == Array(C32))
-    t_2d = time_it(() -> (potential!(μ, C, γ); concentration!(C, μ, dtD)), backend)
-    t_32 = time_it(() -> (potential32!(μ, C, γ, mask, shift);
-                          concentration32!(C, μ, dtD, mask, shift)), backend)
-    @printf("@index(Global, NTuple): %8.3f ms per step\n", t_2d * 1e3)
-    @printf("Int32 split by hand:    %8.3f ms per step\n", t_32 * 1e3)
-    return
-end
-
-compare_indexing(backend, FT, ns[end], γ, dt * D)
-
-# On Apple GPUs the hand-made split is about 3× faster. On NVIDIA and AMD GPUs it
-# brings nothing, or is even slower: always measure on your own hardware.
 
 # ## 11. Performance of kernel programming
 #
@@ -1116,8 +1050,8 @@ fig
 # same number of steps.
 #
 # *On a full GPU, try `n_big = 8192` (the size of our benchmarks): it takes about
-# 40 s on an A100 or MI250X, but several minutes on a small MIG slice, and plotting
-# 67 million cells takes a while too.*
+# 40 s on an A100 or MI250X, but several minutes on a small MIG slice or a laptop,
+# and plotting 67 million cells takes a while too.*
 
 n_big = 2048
 haskey(ENV, "CI") && (n_big = 256)             # CI only: small size, fast run  #src

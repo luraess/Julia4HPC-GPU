@@ -12,7 +12,7 @@ using KernelAbstractions, Printf, Random, Statistics
 backend = CPU();  FT = Float64                  # CPU: only to check that the code runs
 # using CUDA;   backend = CUDABackend();  FT = Float64
 # using AMDGPU; backend = ROCBackend();   FT = Float64
-# using Metal;  backend = MetalBackend(); FT = Float32
+# using Metal;  backend = MetalBackend(); FT = Float32; include(joinpath(@__DIR__, "metal_index_fix.jl"))
 
 # ---- the building blocks of the notebook ----
 

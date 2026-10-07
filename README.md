@@ -40,6 +40,9 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
 On an Apple laptop, also run `julia --project=. -e 'using Pkg; Pkg.add("Metal")'`. Then open [`notebooks/gpu_workshop.ipynb`](notebooks/gpu_workshop.ipynb) in Jupyter or VS Code.
 
+> [!NOTE]
+> On a Mac, precompiling prints a long list of warnings from AMDGPU, such as `LLD is unavailable` or `HIP library is unavailable`. Ignore them: AMDGPU is only used on AMD GPUs.
+
 ## Material
 
 | file | content |
@@ -48,6 +51,7 @@ On an Apple laptop, also run `julia --project=. -e 'using Pkg; Pkg.add("Metal")'
 | [`solutions/gpu_workshop_solution.ipynb`](solutions/gpu_workshop_solution.ipynb) | the same notebook, completed |
 | [`docs/gpu_workshop.md`](docs/gpu_workshop.md) | the completed notebook as a page to read |
 | [`extras/fused_step.jl`](extras/fused_step.jl) | reference solution for the "even fewer arrays" exercise of the outlook |
+| [`extras/metal_index_fix.jl`](extras/metal_index_fix.jl) | temporary fix for slow indexing on Apple GPUs ([Metal.jl#910](https://github.com/JuliaGPU/Metal.jl/issues/910)), loaded by the Metal block of the notebook |
 
 <br>
 
