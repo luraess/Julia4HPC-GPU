@@ -328,7 +328,7 @@ T_peak = T_copyto[end]
 #
 # A GPU kernel keeps only the **body of the loop**: it describes what happens at one
 # `(ix, iy)`. The GPU then runs it for all `(ix, iy)` at once, one *work-item* (a
-# GPU thread) each. With KernelAbstractions:
+# *thread* in CUDA terms) each. With KernelAbstractions:
 #
 # - `@kernel` turns a function into a kernel. A kernel returns nothing, it writes
 #   into its arguments.
@@ -358,8 +358,8 @@ println("memcopy_ka! works")
 #
 # Above, the sizes were only given at launch: the kernel is *dynamic*. We can also
 # fix them when instantiating: the *workgroup size*, i.e. how many work-items are
-# grouped together on the GPU (256 is a good default on all GPUs), and the `ndrange`.
-# The compiler then knows them in advance:
+# grouped together on the GPU (a *thread block* in CUDA; 256 is a good default on
+# all GPUs), and the `ndrange`. The compiler then knows them in advance:
 
 memcopy_static! = memcopy_ka!(backend, 256, size(A))   # workgroup size and ndrange fixed
 memcopy_static!(A, B)                                  # no ndrange needed at launch
@@ -875,6 +875,25 @@ println("matches the reference: ", err_ka < sqrt(eps(FT)))
 # these into `(ix, iy)`. A 2D workgroup size such as `(8, 4)` is only the *shape of
 # the tile* of the array that a workgroup covers.
 #
+# Each vendor has its own names for the same things. CUDA's are the most common in
+# GPU programming:
+#
+# | KernelAbstractions | CUDA | AMD (HIP) | Apple (Metal) |
+# |:-------------------|:-----|:----------|:--------------|
+# | work-item | thread | thread (work-item) | thread |
+# | workgroup | thread block | block (workgroup) | threadgroup |
+# | all work-items of a launch | grid | grid | grid |
+# | `workgroupsize` | threads per block | block size | threads per threadgroup |
+# | `@index(Local, …)` | `threadIdx` | `threadIdx` | `thread_position_in_threadgroup` |
+# | `@index(Group, …)` | `blockIdx` | `blockIdx` | `threadgroup_position_in_grid` |
+# | `@index(Global, …)` | `(blockIdx-1) * blockDim + threadIdx` | same as CUDA | `thread_position_in_grid` |
+# | lockstep bunch | warp (32) | wavefront (64) | SIMD-group (32) |
+# | compute unit | SM (streaming multiprocessor) | CU (compute unit) | GPU core |
+#
+# In CUDA.jl and AMDGPU.jl these indices start at 1, hence the `-1`. One more
+# difference to keep in mind: KernelAbstractions' `ndrange` counts work-items, while
+# a CUDA launch takes the number of *blocks*, `cld(ndrange, workgroupsize)`.
+#
 # Let's look at both numbers for every element of a small 32 × 16 array:
 
 @kernel function index_demo!(group, item)
@@ -1157,7 +1176,7 @@ println(join((device_name, nameof(typeof(backend)), FT, round(T_copyto[end]; dig
 #   to `T_peak`.
 # - The same code runs on NVIDIA, AMD and Apple GPUs, and on the CPU.
 #
-# ### Food for thought: even fewer arrays
+# ### Challenge: even fewer arrays
 #
 # Our two-pass algorithm stores `μ` between the passes. But `μ` does not depend on
 # its own history: we can **recompute it instead of storing it**. `∇²μ` needs `μ`

@@ -1,6 +1,6 @@
 # Cahn-Hilliard with a fused time step: one kernel per step, μ recomputed instead
-# of stored. Reference solution for "Food for thought: even fewer arrays", at the
-# end of notebooks/gpu_workshop.ipynb.
+# of stored. Reference solution for "Challenge: even fewer arrays", at the end of
+# notebooks/gpu_workshop.ipynb.
 #
 # Run from the repository root:
 #
