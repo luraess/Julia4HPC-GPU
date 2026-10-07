@@ -47,6 +47,7 @@ On an Apple laptop, also run `julia --project=. -e 'using Pkg; Pkg.add("Metal")'
 | [`notebooks/gpu_workshop.ipynb`](notebooks/gpu_workshop.ipynb) | the workshop notebook, with blanks to fill in |
 | [`solutions/gpu_workshop_solution.ipynb`](solutions/gpu_workshop_solution.ipynb) | the same notebook, completed |
 | [`docs/gpu_workshop.md`](docs/gpu_workshop.md) | the completed notebook as a page to read |
+| [`extras/fused_step.jl`](extras/fused_step.jl) | reference solution for the "even fewer arrays" exercise of the outlook |
 
 <br>
 
