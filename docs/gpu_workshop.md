@@ -34,6 +34,13 @@ To use a GPU, comment out the two CPU lines and uncomment the three lines of you
 
 `FT` is the floating-point type we compute in. Apple GPUs do not support `Float64`.
 
+> **On an Apple GPU?** Expect the kernels of sections 6, 10 and 11, and the array
+> programming of sections 8 and 9, to reach only about 20–30% of `T_peak`. Metal
+> computes 2D indices in 64-bit integer arithmetic, which Apple GPUs emulate in
+> software ([Metal.jl#910](https://github.com/JuliaGPU/Metal.jl/issues/910)). The
+> code is correct, only slower: compare the trends between versions rather than
+> the absolute numbers. Section 10 shows a workaround.
+
 ````julia
 backend = CPU();  FT = Float64                      # CPU: only to check that the code runs
 device_name = Sys.cpu_info()[1].model
