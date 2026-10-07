@@ -641,8 +641,8 @@ lines(ts, Fs; axis=(xlabel="t", ylabel="free energy F"))
 #
 # ```
 #  faces:   qx[1]    qx[2]    qx[3]   ...   qx[nx]   qx[nx+1]
-#             |  A[1]  |  A[2]  |      ...     |  A[nx]  |
-#             0                                          0     <- boundary faces
+#             |  A[1]  |  A[2]  |     ...     |  A[nx]  |
+#             0                                         0     <- boundary faces
 # ```
 #
 # **No-flux boundaries** come for free: the two boundary faces are allocated with
@@ -1160,7 +1160,7 @@ println(join((device_name, nameof(typeof(backend)), FT, round(T_copyto[end]; dig
 #   write stencil kernels in a notation close to the maths, and run them on many
 #   GPUs, with the halo exchange between them handled for you.
 # - **Higher-level finite differences:** [Chmy.jl](https://github.com/PTsolvers/Chmy.jl)
-#   builds dimension-agnostic stencils on staggered grids, on top of
+#   builds dimension-agnostic stencils on staggered grids using tensor DSL, on top of
 #   KernelAbstractions.
 # - **More kinds of devices:** [Reactant.jl](https://github.com/EnzymeAD/Reactant.jl)
 #   compiles Julia code through MLIR and XLA, for CPUs, GPUs and TPUs.
