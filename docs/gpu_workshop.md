@@ -31,8 +31,8 @@ Now choose the device to run on. The CPU is active by default: it is only there
 to check that the code runs, the performance sections are meant for a GPU.
 
 To use a GPU, comment out the two CPU lines and uncomment the lines of your GPU
-(select them and press `Ctrl + /`). On Arctic, that is the NVIDIA block on the
-`ar_mig` and `ar_a100` partitions, and the AMD block on `ar_mi210`.
+(select them and press `Ctrl + /`). On Arctic, that is the NVIDIA block with the
+*A100 MIG* profile, and the AMD block with the *MI210* profile.
 
 `FT` is the floating-point type we compute in. Apple GPUs do not support `Float64`.
 
@@ -97,7 +97,7 @@ Two things to take from this table:
 For such memory-bound codes, the speedup of a GPU over a CPU is about the ratio
 of their memory bandwidths.
 
-On Arctic, the `ar_mig` partition gives you a *slice* of an A100 (MIG). A slice
+On Arctic, the *A100 MIG* profile gives you a *slice* of an A100 (MIG). A slice
 gets a share of the memory bandwidth: roughly 1/8 for `1g.10gb`, 1/4 for `2g.20gb`
 and 1/2 for `3g.40gb`. We will measure what you actually get in section 5.
 

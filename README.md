@@ -41,13 +41,14 @@ julia -e '
 git clone https://github.com/luraess/Julia4HPC-GPU.git
 ```
 
-**3. Start a JupyterHub session** on one of these partitions:
+**3. Start a JupyterHub session** with one of the workshop profiles. You can only have one Jupyter session open at a time, so pick one GPU:
 
-| partition | GPU | backend in the notebook |
+| JupyterHub profile | GPU | backend in the notebook |
 |---|---|---|
-| `ar_mig` | slice of an NVIDIA A100 (MIG) | CUDA |
-| `ar_a100` | NVIDIA A100 | CUDA |
-| `ar_mi210` | AMD MI210 (1 h session limit) | AMDGPU |
+| *Julia4HPC Nvidia A100 MIG 14 octobre 2026* | slice of an NVIDIA A100 (MIG) | CUDA |
+| *Julia4HPC AMD MI210 14 octobre 2026* | AMD MI210 | AMDGPU |
+
+These profiles run on a reservation for 14 October. On other days, use Arctic's regular MIG and MI210 profiles.
 
 **4. Open [`notebooks/gpu_workshop.ipynb`](notebooks/gpu_workshop.ipynb)** with the *Julia 1.13* kernel. In the setup cell, uncomment the lines for your GPU, as the notebook explains.
 
