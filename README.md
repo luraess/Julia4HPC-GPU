@@ -22,7 +22,7 @@ We take one equation, Cahn-Hilliard in 2D, from a plain CPU loop to a GPU kernel
 
 The workshop runs on [Arctic](https://services.criann.fr/services/hpc/cluster-austral/guide/#service-mesonet-arctic), the MesoNET training partition of the Austral cluster at CRIANN. Julia and all the packages we need are installed in a shared environment.
 
-**1. Install the Julia kernel for Jupyter, once.** Log in with `ssh -l your_login arctic.criann.fr` and run (from the [workshop setup](https://github.com/GroupeCalcul/JuliaFrejus2026#jupyter-julia-kernel)):
+**1. Install the Julia kernel for Jupyter, once.** Log in with `ssh -l your_login arctic.criann.fr` and run (adapted from the [workshop setup](https://github.com/GroupeCalcul/JuliaFrejus2026#jupyter-julia-kernel)):
 
 ```bash
 export SHARE=/home/2500001/PROJETS/M26182/PARTAGE/
@@ -32,8 +32,11 @@ julia -e 'import Pkg; Pkg.build("IJulia")'
 julia -e '
     using IJulia
     env = Dict(k => ENV[k] for k in ("JULIA_DEPOT_PATH", "JULIA_LOAD_PATH") if haskey(ENV, k))
+    env["ROCM_PATH"] = "/soft/amd/rocm-6.4.0"   # AMD GPUs: the default ROCm is too old
     installkernel("Julia", "--project=@."; env)'
 ```
+
+Already installed the kernel from the workshop setup page? Run this again: it replaces the kernel and adds the `ROCM_PATH` line, which the AMD GPUs need.
 
 **2. Get the material,** in the same terminal:
 
@@ -41,7 +44,7 @@ julia -e '
 git clone https://github.com/luraess/Julia4HPC-GPU.git
 ```
 
-**3. Start a JupyterHub session** with one of the workshop profiles. You can only have one Jupyter session open at a time, so pick one GPU:
+**3. Start a JupyterHub session** at [austral-hub.criann.fr](https://austral-hub.criann.fr/), with one of the workshop profiles. You can only have one Jupyter session open at a time, so pick one GPU:
 
 | JupyterHub profile | GPU | backend in the notebook |
 |---|---|---|
