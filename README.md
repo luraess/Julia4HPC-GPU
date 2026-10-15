@@ -6,8 +6,6 @@
 
 GPU computing in Julia for HPC: the GPU part of [**Julia4HPC**, Formation au Langage Julia pour le Calcul Haute Performance](https://julia4hpc.sciencesconf.org/program/graphic/date/2026-10-14), Fréjus (France), 12–16 October 2026.
 
-**When:** Wednesday 14 October 2026, 9:00–10:20 and 10:40–12:00, room Mimosa
-
 **Instructor:** [Ludovic Räss](https://github.com/luraess)
 
 <br clear="right">
@@ -36,22 +34,13 @@ julia -e '
     installkernel("Julia", "--project=@."; env)'
 ```
 
-Already installed the kernel from the workshop setup page? Run this again: it replaces the kernel and adds the `ROCM_PATH` line, which the AMD GPUs need.
-
 **2. Get the material,** in the same terminal:
 
 ```bash
 git clone https://github.com/luraess/Julia4HPC-GPU.git
 ```
 
-**3. Start a JupyterHub session** at [austral-hub.criann.fr](https://austral-hub.criann.fr/), with one of the workshop profiles. You can only have one Jupyter session open at a time, so pick one GPU:
-
-| JupyterHub profile | GPU | backend in the notebook |
-|---|---|---|
-| *Julia4HPC Nvidia A100 MIG 14 octobre 2026* | slice of an NVIDIA A100 (MIG) | CUDA |
-| *Julia4HPC AMD MI210 14 octobre 2026* | AMD MI210 | AMDGPU |
-
-These profiles run on a reservation for 14 October. On other days, use Arctic's regular MIG and MI210 profiles.
+**3. Start a JupyterHub session** at [austral-hub.criann.fr](https://austral-hub.criann.fr/), with one of the workshop profiles.
 
 **4. Open [`notebooks/gpu_workshop.ipynb`](notebooks/gpu_workshop.ipynb)** with the *Julia 1.13* kernel. In the setup cell, uncomment the lines for your GPU, as the notebook explains.
 
@@ -66,7 +55,7 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 On an Apple laptop, also run `julia --project=. -e 'using Pkg; Pkg.add("Metal")'`. Then open [`notebooks/gpu_workshop.ipynb`](notebooks/gpu_workshop.ipynb) in Jupyter or VS Code.
 
 > [!NOTE]
-> On a Mac, precompiling prints a long list of warnings from AMDGPU, such as `LLD is unavailable` or `HIP library is unavailable`. Ignore them: AMDGPU is only used on AMD GPUs.
+> On a machine without AMD GPU, precompiling prints a long list of warnings from AMDGPU, such as `LLD is unavailable` or `HIP library is unavailable`. Ignore them: AMDGPU is only used on AMD GPUs.
 
 ## Material
 
